@@ -23,11 +23,21 @@ COMMANDS
 
 > Initializes an empty Git repository and runs 'fetch'.
 
+Common options:
+
+    --verbose (repeat for more verbosity)
     --trunk=<trunk_subdir>
-    --branches=<branches_subdir>
-    --tags=<branches_subdir>
     --username=<user>
     --password=<password>
+    --fetch-workers=<number_of_SVN_fetcher_threads>
+
+Uncommon options;
+
+    --branches=<branches_subdir>
+    --debug (raise SIGABRT on errors instead of exiting)
+    --origin=<origin_name>
+    --tags=<branches_subdir>
+    --rev-chunk=<revisions_per_fetchworker>
 
 BASIC EXAMPLES
 --------------
