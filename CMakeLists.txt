@@ -16,13 +16,9 @@ FILE(GLOB_RECURSE SRC_GIT_ISVN src/*.c src/*.h)
 FILE(GLOB_RECURSE SRC_VCS_SVN vcs-svn/*.c vcs-svn/*.h)
 
 ADD_DEFINITIONS(-D_GNU_SOURCE)
-SET(CMAKE_C_FLAGS "-fstack-protector-strong --param=ssp-buffer-size=4 -grecord-gcc-switches ${CMAKE_C_FLAGS}")
-SET(CMAKE_C_FLAGS "-g -O2 -std=gnu99 -Wall -Wextra -mtune=generic -pipe -Wp,-D_FORTIFY_SOURCE=2 ${CMAKE_C_FLAGS}")
 
-# TODO: Re-add:
-ADD_DEFINITIONS(-Wno-error)
-ADD_DEFINITIONS(-Wno-unused-parameter)
-ADD_DEFINITIONS(-Wno-sign-compare)
+SET(CMAKE_C_FLAGS "-fstack-protector-strong --param=ssp-buffer-size=4 -grecord-gcc-switches ${CMAKE_C_FLAGS}")
+SET(CMAKE_C_FLAGS "-g -O2 -std=gnu99 -Wall -Wextra -Werror -mtune=generic -pipe -Wp,-D_FORTIFY_SOURCE=2 ${CMAKE_C_FLAGS}")
 
 ADD_EXECUTABLE(git-isvn ${SRC_GIT_ISVN} ${SRC_VCS_SVN})
 TARGET_LINK_LIBRARIES(git-isvn git2 svn_client-1 svn_delta-1 svn_ra-1 svn_subr-1 apr-1 crypto ssl bsd pthread z)

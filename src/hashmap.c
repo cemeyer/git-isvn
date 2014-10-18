@@ -117,6 +117,7 @@ void
 hashmap_free(struct hashmap *h, bool dummy)
 {
 
+	(void)dummy;
 	free(h->hm_table);
 	memset(h, 0, sizeof(*h));
 }
