@@ -658,13 +658,14 @@ static int
 isvn_parse_opts(int ac, char **av, const struct usage_option *lopts,
     const char **usages)
 {
+	const struct usage_option *it;
 	struct option *gopts;
 	char *sopts;
-	int c, idx;
+	int c;
 
 	usage_to_getopt_options(lopts, &gopts, &sopts);
 
-	while ((c = getopt_long(ac, av, sopts, gopts, &idx)) != -1) {
+	while ((c = getopt_long(ac, av, sopts, gopts, NULL)) != -1) {
 		switch (c) {
 		case '?':
 		default:
@@ -689,7 +690,12 @@ isvn_parse_opts(int ac, char **av, const struct usage_option *lopts,
 		case 'p':
 		case 't':
 		case 'u':
-			*(char **)lopts[idx].extra = xstrdup(optarg);
+			for (it = lopts; it->flag; it++) {
+				if (it->flag == c) {
+					*(char **)it->extra = xstrdup(optarg);
+					break;
+				}
+			}
 			break;
 
 		case 'r':
@@ -707,9 +713,15 @@ isvn_parse_opts(int ac, char **av, const struct usage_option *lopts,
 			 * will be a FALLTHROUGH. */
 		case 'F':
 		case 'R':
-			*(unsigned *)lopts[idx].extra =
-			    (unsigned)isvn_opt_parse_long(usages, lopts,
-				optarg, "Bad quantity");
+			for (it = lopts; it->flag; it++) {
+				if (it->flag == c) {
+					//*(char **)it->extra = xstrdup(optarg);
+					*(unsigned *)it->extra =
+					    (unsigned)isvn_opt_parse_long(usages,
+						lopts, optarg, "Bad quantity");
+					break;
+				}
+			}
 			break;
 		}
 	}
