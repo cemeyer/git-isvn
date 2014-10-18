@@ -1,0 +1,10 @@
+*/*.o
+*/*.a
+/CMakeFiles
+/CMakeCache.txt
+/cmake_install.cmake
+/Makefile
+/TAGS
+/TAGS.NEW
+.*.swp
+/git-isvn
