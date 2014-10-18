@@ -51,7 +51,7 @@
 
 struct svn_branch {
 	struct hashmap_entry		 br_entry;
-	char				*br_name;
+	const char			*br_name;
 	TAILQ_HEAD(revlist, branch_rev)	 br_revs;
 };
 
@@ -82,6 +82,19 @@ svn_branch_cmp(const struct svn_branch *b1, const struct svn_branch *b2,
 }
 
 struct svn_branch *
+new_svn_branch(const char *name)
+{
+	struct svn_branch *b;
+
+	b = xcalloc(1, sizeof(*b));
+
+	b->br_name = strintern(name);
+	hashmap_entry_init(&b->br_entry, strhash(name));
+	TAILQ_INIT(&b->br_revs);
+	return b;
+}
+
+struct svn_branch *
 svn_branch_get(struct hashmap *h, const char *name)
 {
 	struct svn_branch *b, blookup;
@@ -93,15 +106,7 @@ svn_branch_get(struct hashmap *h, const char *name)
 	if (b)
 		return b;
 
-	b = xmalloc(sizeof(*b));
-	if (b == NULL)
-		die("malloc");
-
-	memset(b, 0, sizeof(*b));
-	b->br_name = xstrdup(name);
-	hashmap_entry_init(&b->br_entry, strhash(name));
-	TAILQ_INIT(&b->br_revs);
-
+	b = new_svn_branch(name);
 	hashmap_add(h, b);
 	return b;
 }
@@ -120,7 +125,6 @@ svn_branch_free(struct svn_branch *br)
 	if (!TAILQ_EMPTY(&br->br_revs))
 		die("%s: non-empty branch %s", __func__, br->br_name);
 
-	free(br->br_name);
 	memset(br, 0xfd, sizeof(*br));
 	free(br);
 }
@@ -164,6 +168,12 @@ svn_branch_move_revs(struct svn_branch *dst, struct svn_branch *src)
 	TAILQ_SPLICE(&tmphd, &dst->br_revs, it, rv_list);
 	TAILQ_CONCAT(&dst->br_revs, &src->br_revs, rv_list);
 	TAILQ_CONCAT(&dst->br_revs, &tmphd, rv_list);
+
+	/* INVARIANTS */
+	if (!TAILQ_EMPTY(&tmphd))
+		die("!empty tmphd");
+	if (!TAILQ_EMPTY(&src->br_revs))
+		die("!empty src");
 }
 
 void
@@ -259,17 +269,43 @@ isvn_brancher_init(void)
 	}
 }
 
-/* Wait until a workable branch exists in the bucket, and remove it.  If there
+/* Wait until a workable branch exists in the bucket, and return it.  If there
  * is nothing left that can be queued in this bucket, return NULL. */
 static struct svn_branch *
 get_workable_branch(struct svn_bucket *bk)
 {
-	struct svn_branch *branch, *bb = NULL;
+	struct branch_rev *dummy_rev, *it, *end;
+	struct svn_branch *branch, *bb, *bret;
+	unsigned lowest_rev, brev;
 	struct hashmap_iter iter;
-	unsigned lowest_rev = UINT_MAX, brev;
+	unsigned rev;
 	bool done;
 
+	/*
+	 * We need to wait for all revs in a given range to have been fetched
+	 * (i.e. g_rev_fetchdone) before we start committing (or we could end
+	 * up having a hole of missing revisions on this branch). However,
+	 * fetchers will just keep throwing more crap on the end of the branch,
+	 * out of order.
+	 *
+	 * If we waited (as we used to) for the branch to quiesce before
+	 * committing anything, continuously active branches (like head/trunk)
+	 * would never leave memory until we finished fetching everything from
+	 * SVN or ran out of memory and died.
+	 *
+	 * So: now we pick a branch that has some commits, insert a bookmark
+	 * 'dummy_rev,' wait for fetchers to finish with the logical revision
+	 * range up to the mark, cut the branch in half at the bookmark
+	 * (TAILQ_SPLICE), and finally return the first half to the caller.
+	 */
+
+	bb = NULL;
 	done = false;
+	lowest_rev = UINT_MAX;
+
+	bret = new_svn_branch("");
+	dummy_rev = new_branch_rev(UINT_MAX);
+
 	mtx_lock(&bk->bk_lock);
 	while (true) {
 		hashmap_iter_init(&bk->bk_branches, &iter);
@@ -292,8 +328,14 @@ get_workable_branch(struct svn_bucket *bk)
 		 * -- each one owns a bucket. The only other accessor on
 		 * bk_lock is the fetcher threads, and they will only ever
 		 * insert more revs. */
-		if (bb)
+		if (bb) {
+			/* br_revs is kept sorted; Match the pattern to avoid
+			 * being shuffled to the end */
+			dummy_rev->rv_rev =
+			    TAILQ_LAST(&bb->br_revs, revlist)->rv_rev;
+			TAILQ_INSERT_TAIL(&bb->br_revs, dummy_rev, rv_list);
 			break;
+		}
 
 		if (done)
 			break;
@@ -310,30 +352,55 @@ get_workable_branch(struct svn_bucket *bk)
 
 		mtx_lock(&bk->bk_lock);
 	}
-	mtx_unlock(&bk->bk_lock);
 
-	if (bb) {
-		unsigned lastrev = 0, rev;
-
-		mtx_lock(&bk->bk_lock);
-		while (true) {
-			/* Keep waiting for later revs if more stuff is
-			 * appended. */
-			rev = TAILQ_LAST(&bb->br_revs, revlist)->rv_rev;
-			if (rev == lastrev)
-				break;
-			lastrev = rev;
-			mtx_unlock(&bk->bk_lock);
-
-			isvn_wait_fetch(lastrev);
-
-			mtx_lock(&bk->bk_lock);
-		}
-		hashmap_remove(&bk->bk_branches, bb, NULL);
-		mtx_unlock(&bk->bk_lock);
+	if (bb == NULL) {
+		svn_branch_free(bret);
+		bret = NULL;
+		goto out;
 	}
 
-	return bb;
+	rev = TAILQ_PREV(dummy_rev, revlist, rv_list)->rv_rev;
+	bret->br_name = bb->br_name;
+
+	mtx_unlock(&bk->bk_lock);
+	isvn_wait_fetch(rev);
+	mtx_lock(&bk->bk_lock);
+
+	/* INVARIANTS (TAILQ_SPLICE) */
+	it = TAILQ_NEXT(dummy_rev, rv_list);
+	end = TAILQ_LAST(&bb->br_revs, revlist);
+
+	/* Split bb at rev so we don't wait forever. */
+	TAILQ_SPLICE(&bret->br_revs, &bb->br_revs, dummy_rev, rv_list);
+
+	/* INVARIANTS (TAILQ_SPLICE) */
+	if (TAILQ_NEXT(dummy_rev, rv_list))
+		die("dummy: NEXT non-NULL");
+	if (TAILQ_LAST(&bb->br_revs, revlist) != dummy_rev)
+		die("bb hd: last != dummy");
+	if (TAILQ_FIRST(&bret->br_revs) != it)
+		die("bret hd: first != dummy+1");
+	/* If 'it' == NULL, end == dummy_rev which belongs to h1 still */
+	if (it && TAILQ_LAST(&bret->br_revs, revlist) != end)
+		die("bret hd: last != end");
+	if (it && TAILQ_PREV(it, revlist, rv_list))
+		die("it: PREV non-NULL");
+	if (it == NULL && !TAILQ_EMPTY(&bret->br_revs))
+		die("bret: non-empty but nothing after split?");
+
+	/* Leave later work in bb (bucket), taking work from <= 'rev.' */
+	TAILQ_SWAP(&bb->br_revs, &bret->br_revs, branch_rev, rv_list);
+	TAILQ_REMOVE(&bret->br_revs, dummy_rev, rv_list);
+
+out:
+	mtx_unlock(&bk->bk_lock);
+
+	/* INVARIANTS */
+	if (bb != NULL && bret == NULL)
+		die("NULL bret?");
+
+	branch_rev_free(dummy_rev);
+	return bret;
 }
 
 /* Look up a corresponding tree entry for a (potentially) multi-component path

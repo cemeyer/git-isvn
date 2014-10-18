@@ -180,6 +180,7 @@ void branch_rev_free(struct branch_rev *br);
 void branch_rev_mergeinto(struct branch_rev *dst, struct branch_rev *src);
 
 void isvn_brancher_init(void);
+struct svn_branch *new_svn_branch(const char *name);
 struct svn_branch *svn_branch_get(struct hashmap *h, const char *name);
 void svn_branch_hash_init(struct hashmap *hash);
 void svn_branch_revs_enqueue_and_free(struct svn_branch *branch);
@@ -307,7 +308,6 @@ static inline void rw_unlock(pthread_rwlock_t *lk)
 		    (head1)->tqh_last;					\
 		(head1)->tqh_last = (head2)->tqh_last;			\
 		TAILQ_NEXT((last2), field) = NULL;			\
-		(last2)->field.tqe_prev = &TAILQ_FIRST((head2));	\
 		(head2)->tqh_last = &TAILQ_NEXT((last2), field);	\
 	}								\
 } while (0)
