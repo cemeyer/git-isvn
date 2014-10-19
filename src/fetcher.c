@@ -331,6 +331,9 @@ branch_get_props(struct branch_rev *br, apr_hash_t *props, apr_pool_t *pool)
 	apr_ssize_t klen;
 	void *val;
 
+	/* Fake ascending timestamps if the repository doesn't have them. */
+	br->rv_timestamp = br->rv_rev;
+
 #define KEYEQ(str) (klen == strlen((str)) && \
 	strncmp(key, (str), strlen((str))) == 0)
 
@@ -343,29 +346,41 @@ branch_get_props(struct branch_rev *br, apr_hash_t *props, apr_pool_t *pool)
 		else if (KEYEQ("svn:author"))
 			br->rv_author = xstrndup(valstr->data, valstr->len);
 		else if (KEYEQ("svn:date")) {
-			printf("XXX TODO: Parse this date string `%.*s'\n",
-			    (int)valstr->len, (const char *)valstr->data);
-#if 0
-			char datez[256], *r;
+			char datestr[64], *resid;
 			struct tm tm = {};
-			size_t len;
+			time_t cdate;
+			size_t slen;
 
-			/* NUL-terminate */
-			len = valstr->len;
-			if (len >= sizeof(datez))
-				len = sizeof(datez) - 1;
-			memcpy(datez, valstr->data, len);
-			datez[len] = '\0';
+			/* nul-terminate */
+			slen = valstr->len;
+			if (slen >= sizeof(datestr))
+				slen = sizeof(datestr) - 1;
 
-			r = strptime(datez, "XXX", &tm);
-			if ((r == NULL || *r != '\0')) {
+			memcpy(datestr, valstr->data, slen);
+			datestr[slen] = '\0';
+
+			/*
+			 * E.g., 2013-05-25T00:08:20.798738Z
+			 *        %Y  %m %d %H %M %S.<ignored>
+			 *
+			 * We verify that up to the '.' is parsed.
+			 */
+			resid = strptime(datestr, "%Y-%m-%dT%H:%M:%S.", &tm);
+			if (resid == NULL || resid <= datestr || resid[-1] != '.') {
 				if (option_verbosity >= 0)
-					fprintf(stderr, "W: invalid timestamp: %s\n",
-					    datez);
-			} else
-				rv->rv_timestamp = tm.
+					printf("W: Invalid timestamp: %s\n", datestr);
+				continue;
+			}
 
-#endif
+			cdate = mktime(&tm);
+			if (cdate == (time_t)-1) {
+				if (option_verbosity >= 0)
+					printf("W: mktime(%s): error? %s\n",
+					    datestr, strerror(errno));
+				continue;
+			}
+
+			br->rv_timestamp = cdate;
 		} else if (KEYEQ("google:author")) {
 			/* Ignore, duplicate of svn:author. */
 #if 0
