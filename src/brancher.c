@@ -416,14 +416,13 @@ isvn_lookup_tree_path_recursive(git_tree **aux, const git_tree *tree,
 	char *path, *s, spath[PATH_MAX];
 	const git_tree_entry *ent;
 	ssize_t path_rem, clen;
-	const git_tree *root;
+	git_tree *aux2;
 	int rc;
 
-	root = tree;
 	path_rem = strlen(cpath);
 	strlcpy(spath, cpath, sizeof(spath));
 	path = spath;
-	*aux = NULL;
+	*aux = aux2 = NULL;
 
 	while (true) {
 		s = strchrnul(path, '/');
@@ -444,20 +443,19 @@ isvn_lookup_tree_path_recursive(git_tree **aux, const git_tree *tree,
 		path_rem -= clen + 1;
 		path = s + 1;
 
-		if (*aux)
-			git_tree_free(*aux);
-
-		rc = git_tree_lookup(aux, git_tree_owner(tree),
+		rc = git_tree_lookup(&aux2, git_tree_owner(tree),
 		    git_tree_entry_id(ent));
 		if (rc < 0) {
 			char tbuf[41];
 
-			git_oid_nfmt(tbuf, 41, git_tree_id(root));
+			git_oid_nfmt(tbuf, 41, git_tree_id(tree));
 			die("git_tree_lookup: %d (looking for %s in %s)", rc,
-			    cpath, tbuf);
+			    git_tree_entry_name(ent), tbuf);
 		}
 
-		tree = *aux;
+		if (*aux)
+			git_tree_free(*aux);
+		tree = *aux = aux2;
 	}
 
 	return ent;
