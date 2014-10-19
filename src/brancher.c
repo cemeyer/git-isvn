@@ -883,6 +883,7 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	uint64_t now, start_time, last, transpired;
 	struct br_edit *edit;
 	unsigned ecount;
+	bool slow;
 	int rc;
 
 	git_tree *parent_tree, *new_tree;
@@ -961,6 +962,7 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	}
 
 	/* Apply individual edits */
+	slow = false;
 	ecount = 0;
 	TAILQ_FOREACH(edit, &rev->rv_editorder, e_list) {
 		/* Let the user know if a commit is slow to apply (ie. big). */
@@ -968,17 +970,24 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 			now = isvn_now_ms();
 			transpired = now - last;
 
-			if (transpired > 500 /* ms */ && option_verbosity >= 0) {
+			if (transpired > 500 /* ms */) {
 				transpired = now - start_time;
 
-				/* Move to beginning of last line and clear. */
-				if (isatty(fileno(stdout)) && last != start_time)
-					printf("\x1b[1F\x1b[1K");
+				if (option_verbosity >= 0) {
+					/* Move to beginning of last line and clear. */
+					if (isatty(fileno(stdout)) && last != start_time)
+						printf("\x1b[1F\x1b[1K");
 
-				printf("Applying r%u is taking a while"
-				    " (started %lu.%lu seconds ago)...\n",
-				    rev->rv_rev, (long)transpired / 1000,
-				    ((long)transpired % 1000) / 100);
+					printf("Applying r%u is taking a while"
+					    " (started %lu.%lu seconds ago)...\n",
+					    rev->rv_rev, (long)transpired / 1000,
+					    ((long)transpired % 1000) / 100);
+				}
+
+				if (!slow) {
+					slow = true;
+					isvn_fetch_feedback_busy();
+				}
 
 				last = now;
 			}
@@ -1052,6 +1061,9 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 		shabuf);
 	/* A real(-ish) revmap! */
 	isvn_revmap_insert(rev->rv_rev, rev->rv_branch, &ctx->sha1);
+
+	if (slow)
+		isvn_fetch_feedback_unbusy();
 
 	while (nparents)
 		git_commit_free(parents[nparents--]);

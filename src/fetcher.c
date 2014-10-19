@@ -52,6 +52,10 @@
 /* Callback hell! */
 static svn_delta_editor_t *g_svn_dedit_obj;	/* (u) */
 
+static pthread_mutex_t	g_blocked_lk;
+static pthread_cond_t	g_blocked_cond;
+static unsigned		g_blocked_committers;
+
 void
 assert_status_noerr(apr_status_t status, const char *fmt, ...)
 {
@@ -393,6 +397,49 @@ _isvn_fetch_revstart(svn_revnum_t revision, void *cbdata,
 	return NULL;
 }
 
+void
+isvn_fetch_feedback_busy(void)
+{
+
+	mtx_lock(&g_blocked_lk);
+	g_blocked_committers++;
+	mtx_unlock(&g_blocked_lk);
+}
+
+void
+isvn_fetch_feedback_unbusy(void)
+{
+
+	mtx_lock(&g_blocked_lk);
+
+	if (g_blocked_committers < 1)
+		die("%s", __func__);
+
+	if (--g_blocked_committers < g_nr_commit_workers)
+		cond_broadcast(&g_blocked_cond);
+
+	mtx_unlock(&g_blocked_lk);
+}
+
+/*
+ * Feedback mechanism. Fetchers wait until at least one commit thread[0] is not
+ * stuck committing something so we don't chew through all memory while the
+ * poor commit thread(s) are blocked on disk.
+ *
+ * [0] (For now, there is only one due to libgit2 limitations.)
+ */
+static void
+fetch_wait_commit_ready(void)
+{
+
+	mtx_lock(&g_blocked_lk);
+	while (g_blocked_committers >= g_nr_commit_workers) {
+		printf("XXX: %s waiting on committer.\n\n\n", __func__);
+		cond_wait(&g_blocked_cond, &g_blocked_lk);
+	}
+	mtx_unlock(&g_blocked_lk);
+}
+
 void *
 isvn_fetch_worker(void *dummy_i)
 {
@@ -412,6 +459,8 @@ isvn_fetch_worker(void *dummy_i)
 	client = get_svn_ctx();
 
 	for (;;) {
+		fetch_wait_commit_ready();
+
 		/* grab a chunk to work on */
 		isvn_fetcher_getrange(&revlo, &revhi, &done);
 		if (done)
@@ -450,4 +499,6 @@ isvn_fetch_init(void)
 {
 	g_svn_dedit_obj = svn_delta_default_editor(g_apr_pool);
 	isvn_editor_inialize_dedit_obj(g_svn_dedit_obj);
+	mtx_init(&g_blocked_lk);
+	cond_init(&g_blocked_cond);
 }

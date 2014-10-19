@@ -178,6 +178,8 @@ void branch_edit_free(struct br_edit *edit);
 struct branch_rev *new_branch_rev(svn_revnum_t rev);
 void branch_rev_free(struct branch_rev *br);
 void branch_rev_mergeinto(struct branch_rev *dst, struct branch_rev *src);
+void isvn_fetch_feedback_busy(void);
+void isvn_fetch_feedback_unbusy(void);
 
 void isvn_brancher_init(void);
 struct svn_branch *new_svn_branch(const char *name);
