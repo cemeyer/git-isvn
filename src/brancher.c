@@ -880,7 +880,9 @@ git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
 static int
 git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 {
+	uint64_t now, start_time, last, transpired;
 	struct br_edit *edit;
+	unsigned ecount;
 	int rc;
 
 	git_tree *parent_tree, *new_tree;
@@ -921,6 +923,8 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 			return -EBUSY;
 	}
 
+	start_time = last = isvn_now_ms();
+
 	/* TODO: Get libgit2 to create alternative / ephemoral indices. */
 	rc = git_repository_index(&index, ctx->git_repo);
 	if (rc < 0)
@@ -957,8 +961,30 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	}
 
 	/* Apply individual edits */
-	TAILQ_FOREACH(edit, &rev->rv_editorder, e_list)
+	ecount = 0;
+	TAILQ_FOREACH(edit, &rev->rv_editorder, e_list) {
+		/* Let the user know if a commit is slow to apply (ie. big). */
+		if ((ecount++ % 25) == 0) {
+			now = isvn_now_ms();
+			transpired = now - last;
+
+			if (transpired > 500 /* ms */ && option_verbosity >= 0) {
+				transpired = now - start_time;
+
+				/* Move to beginning of last line and clear. */
+				if (isatty(fileno(stdout)) && last != start_time)
+					printf("\x1b[1F\x1b[1K");
+
+				printf("Applying r%u is taking a while"
+				    " (started %lu.%lu seconds ago)...\n",
+				    rev->rv_rev, (long)transpired / 1000,
+				    ((long)transpired % 1000) / 100);
+
+				last = now;
+			}
+		}
 		git_isvn_apply_edit(ctx, rev, index, edit);
+	}
 
 	rc = git_index_write_tree(&new_tree_oid, index);
 	if (rc < 0)

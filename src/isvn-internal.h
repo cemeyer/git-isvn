@@ -300,6 +300,27 @@ static inline void rw_unlock(pthread_rwlock_t *lk)
 		die("%s: %s(%d)\n", __func__, strerror(rc), rc);
 }
 
+static inline uint64_t
+isvn_now_ms(void)
+{
+	struct timespec ts;
+	int rc;
+
+	rc = clock_gettime(
+#if defined(__FreeBSD__)
+	    CLOCK_REALTIME_FAST,
+#elif defined(__linux__)
+	    CLOCK_REALTIME_COARSE,
+#else
+	    CLOCK_REALTIME,
+#endif
+	    &ts);
+	if (rc < 0)
+		die("%s: %s(%d)\n", __func__, strerror(errno), errno);
+
+	return UINT64_C(1000) * ts.tv_sec + (ts.tv_nsec / 1000000);
+}
+
 /* Like CONCAT, but only removes elements in head2 after last2 */
 #define TAILQ_SPLICE(head1, head2, last2, field) do {			\
 	if (TAILQ_NEXT((last2), field)) {				\
