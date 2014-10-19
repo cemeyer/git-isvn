@@ -433,11 +433,12 @@ fetch_wait_commit_ready(void)
 {
 
 	mtx_lock(&g_blocked_lk);
-	while (g_blocked_committers >= g_nr_commit_workers) {
-		printf("XXX: %s waiting on committer.\n\n\n", __func__);
+	while (g_blocked_committers >= g_nr_commit_workers)
 		cond_wait(&g_blocked_cond, &g_blocked_lk);
-	}
 	mtx_unlock(&g_blocked_lk);
+
+	/* If we're "too far" ahead, just sleep until commit catches up. */
+	isvn_wait_commitdone_catchup();
 }
 
 void *

@@ -118,6 +118,7 @@ fetchdone_range_cmp(const struct fetchdone_range *r1,
 static struct hashmap g_fetchdone_hash;		/* (g) */
 
 static unsigned g_rev_commitdone;		/* (g) */
+static pthread_cond_t g_commitdone_cond;	/* (g) */
 static struct hashmap g_commitdone_hash;	/* (g) */
 static struct hashmap g_commitdrain_hash;	/* (g) */
 
@@ -300,6 +301,8 @@ isvn_mark_commitdone(unsigned revlo, unsigned revhi)
 			g_rev_commitdone = revhi = exist->r_hi;
 			free(exist);
 		}
+
+		cond_broadcast(&g_commitdone_cond);
 	} else {
 		done->r_lo = revlo;
 		done->r_hi = revhi;
@@ -345,6 +348,20 @@ isvn_commitdone_dump(void)
 	/* XXX */
 }
 
+/* XXX may deadlock brancher if fetchwaiting for a rev this high... */
+void
+isvn_wait_commitdone_catchup(void)
+{
+
+	isvn_g_lock();
+
+	/* Arbitrary. */
+	while (g_rev_fetchdone > g_rev_commitdone + 10000)
+		cond_wait(&g_commitdone_cond, &g_lock);
+
+	isvn_g_unlock();
+}
+
 void
 isvn_g_lock(void)
 {
@@ -362,6 +379,7 @@ isvn_globals_init(void)
 {
 	mtx_init(&g_lock);
 	cond_init(&g_rev_cond);
+	cond_init(&g_commitdone_cond);
 
 	g_locks_initted = true;
 

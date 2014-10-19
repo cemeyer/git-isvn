@@ -150,6 +150,8 @@ void isvn_wait_fetch(unsigned rev);
 bool isvn_all_fetched(void);
 void isvn_assert_commit(const char *branch, unsigned rev);
 bool isvn_has_commit(unsigned rev);
+/* Blocks until commit is "almost" caught-up to fetch. */
+void isvn_wait_commitdone_catchup(void);
 
 static inline void
 isvn_commitdrain_inc(unsigned rev)
