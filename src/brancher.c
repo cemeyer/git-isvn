@@ -936,6 +936,7 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	git_commit *parents[2];
 	size_t nparents;
 
+	bool need_newline;
 	char tmpbuf[256];
 
 	if (ctx->svn_rev >= rev->rv_rev) {
@@ -1057,10 +1058,14 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 		free(ctx->commit_log);
 		ctx->commit_log = NULL;
 	}
-	strlcpy(tmpbuf, rev->rv_logmsg, sizeof(tmpbuf));
-	isvn_complete_line(tmpbuf, sizeof(tmpbuf));
-	xasprintf(&ctx->commit_log, "%s\ngit-isvn-id: %s/%s@%u\n", tmpbuf,
-	    g_repos_root, ctx->name, rev->rv_rev);
+
+	need_newline = false;
+	if (*rev->rv_logmsg && rev->rv_logmsg[strlen(rev->rv_logmsg) - 1] != '\n')
+		need_newline = true;
+
+	xasprintf(&ctx->commit_log, "%s%s\ngit-isvn-id: %s/%s@%u\n",
+	    rev->rv_logmsg, need_newline? "\n" : "", g_repos_root, ctx->name,
+	    rev->rv_rev);
 
 	/* reuse buf to strip <foo>@ from (maybe) email: */
 	if (rev->rv_author) {
