@@ -7,19 +7,7 @@
 #include <sys/queue.h>
 #endif
 
-/* Transition hashmap implementations */
-#define hashmap			isvn_hashmap
-#define hashmap_entry		isvn_hashmap_entry
-#define hashmap_iter		isvn_hashmap_iter
-#define hashmap_init		isvn_hashmap_init
-#define hashmap_add		isvn_hashmap_add
-#define hashmap_remove		isvn_hashmap_remove
-#define hashmap_get		isvn_hashmap_get
-#define hashmap_free		isvn_hashmap_free
-#define hashmap_entry_init	isvn_hashmap_entry_init
-#define hashmap_iter_init	isvn_hashmap_iter_init
-#define hashmap_iter_next	isvn_hashmap_iter_next
-#define hashmap_cmp_fn		isvn_hashmap_cmp_fn
+/* TODO: Clean up API now that we are divorced of git(1). */
 
 typedef int (*hashmap_cmp_fn)(const void *, const void *, const void *);
 
