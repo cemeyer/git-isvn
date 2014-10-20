@@ -927,10 +927,8 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	bool slow;
 	int rc;
 
-	git_tree *parent_tree, *new_tree;
-	git_reference *parent_ref;
-	git_object *parent_obj;
 	git_oid new_tree_oid;
+	git_tree *new_tree;
 	char *rem_br, *at;
 
 	git_commit *parents[2];
@@ -966,37 +964,7 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	}
 
 	start_time = last = isvn_now_ms();
-
-	/* TODO: Probably unnecessary to do every rev ... */
-	rc = git_index_clear(ctx->index);
-	if (rc < 0)
-		die("git_index_clear: %d (what?)", rc);
-
 	xasprintf(&rem_br, "refs/remotes/%s", ctx->remote);
-
-	rc = git_branch_lookup(&parent_ref, ctx->git_repo, ctx->remote,
-	    GIT_BRANCH_REMOTE);
-	if (rc < 0 && rc != GIT_ENOTFOUND)
-		die("git_branch_lookup");
-
-	if (rc == 0) {
-		rc = git_reference_peel(&parent_obj, parent_ref, GIT_OBJ_TREE);
-		if (rc < 0)
-			die("git_reference_peel");
-
-		rc = git_tree_lookup(&parent_tree, ctx->git_repo,
-		    git_object_id(parent_obj));
-		if (rc)
-			die("git_tree_lookup");
-
-		rc = git_index_read_tree(ctx->index, parent_tree);
-		if (rc < 0)
-			die("git_index_read_tree");
-	} else {
-		parent_ref = NULL;
-		parent_obj = NULL;
-		parent_tree = NULL;
-	}
 
 	/* Apply individual edits */
 	slow = false;
@@ -1110,10 +1078,6 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 		git_commit_free(parents[nparents--]);
 	git_tree_free(new_tree);
 
-	git_tree_free(parent_tree);
-	git_object_free(parent_obj);
-	git_reference_free(parent_ref);
-
 	free(rem_br);
 	return 0;
 }
@@ -1135,7 +1099,8 @@ cleanup_index_files(void)
 
 /* Get a git index object for this branch. */
 static void
-isvn_get_branch_index(const char *branch, git_index **idxout)
+isvn_get_branch_index(const char *branch, const git_tree *parent_tree,
+    git_index **idxout)
 {
 	struct isvn_git_index *exist, *newind;
 	char *isvn_idx, safebr[64];
@@ -1175,15 +1140,25 @@ isvn_get_branch_index(const char *branch, git_index **idxout)
 
 	mtx_unlock(&g_index_lk);
 
+	rc = git_index_open(idxout, isvn_idx);
+	if (rc < 0)
+		die("git_index_open: %d", rc);
+
 	if (newind) {
 		free(newind->gi_filename);
 		free(newind);
 		newind = NULL;
-	}
 
-	rc = git_index_open(idxout, isvn_idx);
-	if (rc < 0)
-		die("git_index_open: %d", rc);
+		/* Read the existing index */
+		rc = git_index_read(*idxout, false);
+		if (rc < 0)
+			die("git_index_read: %d", rc);
+	} else if (parent_tree) {
+		/* We created a new index file for an existing branch? */
+		rc = git_index_read_tree(*idxout, parent_tree);
+		if (rc < 0)
+			die("git_index_read_tree");
+	}
 }
 
 /*
@@ -1252,6 +1227,7 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 	struct branch_context ctx = {};
 	struct branch_rev *rev, *sr;
 	git_reference *branchref;
+	git_tree *parent_tree;
 	char *remote_branch;
 	const git_oid *oldp;
 	git_oid old_sha1;
@@ -1262,10 +1238,9 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 	ctx.commit_log = NULL;
 	xasprintf(&remote_branch, "%s/%s", option_origin, sb->br_name);
 
-	isvn_get_branch_index(sb->br_name, &ctx.index);
 	ctx.git_repo = g_git_repo;
-
 	old_sha1 = (git_oid) {};
+	parent_tree = NULL;
 	oldp = NULL;
 
 	rc = git_branch_lookup(&branchref, ctx.git_repo, remote_branch,
@@ -1273,8 +1248,20 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 	if (rc < 0 && rc != GIT_ENOTFOUND)
 		die("git_branch_lookup(%s): %d", remote_branch, rc);
 
-	if (rc == 0)
+	if (rc == 0) {
+		git_object *parent_obj;
+
+		rc = git_reference_peel(&parent_obj, branchref, GIT_OBJ_TREE);
+		if (rc < 0)
+			die("git_reference_peel");
+
+		rc = git_tree_lookup(&parent_tree, ctx.git_repo,
+		    git_object_id(parent_obj));
+		if (rc)
+			die("git_tree_lookup");
+
 		oldp = git_reference_target(branchref);
+	}
 
 	if (oldp) {
 		if (git_oid_iszero(oldp))
@@ -1285,6 +1272,8 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 		/* XXX figure out svn_rev of the branch head. */
 	} else
 		ctx.new_branch = true;
+
+	isvn_get_branch_index(sb->br_name, parent_tree, &ctx.index);
 
 	ctx.name = sb->br_name;
 	ctx.remote = remote_branch;
@@ -1310,6 +1299,7 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 	}
 
 	isvn_free_branch_index(sb->br_name, ctx.index);
+	git_tree_free(parent_tree);
 	git_signature_free(ctx.last_signature);
 	git_reference_free(branchref);
 	free(remote_branch);
