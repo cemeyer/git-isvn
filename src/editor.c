@@ -249,7 +249,7 @@ get_edit(struct branch_rev *br, const char *path)
 	edlook.e_path = __DECONST(path, char *);
 	hashmap_entry_init(&edlook.e_entry, strhash(path));
 
-	return hashmap_get(&br->rv_edits, &edlook, NULL);
+	return hashmap_get(&br->rv_edits, &edlook);
 }
 
 static struct br_edit *
@@ -272,7 +272,7 @@ mk_edit(struct branch_rev *br, const char *path,
 	edlook.e_path = __DECONST(path, char *);
 	hashmap_entry_init(&edlook.e_entry, strhash(path));
 
-	edit = hashmap_get(&br->rv_edits, &edlook, NULL);
+	edit = hashmap_get(&br->rv_edits, &edlook);
 	if (edit) {
 		/* INVARIANTS */
 		if (deleted)

@@ -157,8 +157,7 @@ get_svn_ctx(void)
 }
 
 static int
-edit_cmp(const struct br_edit *e1, const struct br_edit *e2,
-	const void *dummy __unused)
+edit_cmp(const struct br_edit *e1, const struct br_edit *e2)
 {
 	return strcmp(e1->e_path, e2->e_path);
 }
@@ -248,7 +247,7 @@ new_branch_rev(svn_revnum_t rev)
 
 	br = xcalloc(1, sizeof(*br));
 	br->rv_rev = rev;
-	hashmap_init(&br->rv_edits, (hashmap_cmp_fn)edit_cmp, 0);
+	hashmap_init(&br->rv_edits, (hashmap_cmp_fn)edit_cmp);
 	TAILQ_INIT(&br->rv_editorder);
 	SLIST_INIT(&br->rv_affil);
 	br->rv_only_empty_dirs = true;
@@ -283,10 +282,10 @@ branch_rev_mergeinto(struct branch_rev *dst, struct branch_rev *src)
 
 	/* Move over edits... */
 	TAILQ_FOREACH_SAFE(edit, &src->rv_editorder, e_list, tmp) {
-		hashmap_remove(&src->rv_edits, edit, NULL);
+		hashmap_remove(&src->rv_edits, edit);
 		TAILQ_REMOVE(&src->rv_editorder, edit, e_list);
 
-		oedit = hashmap_get(&dst->rv_edits, edit, NULL);
+		oedit = hashmap_get(&dst->rv_edits, edit);
 		if (oedit)
 			/* Frees edit. */
 			edit_mergeinto(oedit, edit);

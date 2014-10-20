@@ -68,8 +68,7 @@ static TAILQ_HEAD(gitq, isvn_git_index)	g_index_lru;
 static unsigned				g_inactive_indices;
 
 static int
-git_index_cmp(const struct isvn_git_index *g1, const struct isvn_git_index *g2,
-    const void *dummy __unused)
+git_index_cmp(const struct isvn_git_index *g1, const struct isvn_git_index *g2)
 {
 
 	/* branches are interned, could be ptr equality */
@@ -106,8 +105,7 @@ branch_unlock(const char *name)
 }
 
 static int
-svn_branch_cmp(const struct svn_branch *b1, const struct svn_branch *b2,
-    const void *dummy __unused)
+svn_branch_cmp(const struct svn_branch *b1, const struct svn_branch *b2)
 {
 	return strcmp(b1->br_name, b2->br_name);
 }
@@ -133,7 +131,7 @@ svn_branch_get(struct hashmap *h, const char *name)
 	blookup.br_name = __DECONST(name, char *);
 	hashmap_entry_init(&blookup.br_entry, strhash(name));
 
-	b = hashmap_get(h, &blookup, NULL);
+	b = hashmap_get(h, &blookup);
 	if (b)
 		return b;
 
@@ -230,7 +228,7 @@ svn_branch_revs_enqueue_and_free(struct svn_branch *branch)
 void
 svn_branch_hash_init(struct hashmap *hash)
 {
-	hashmap_init(hash, (hashmap_cmp_fn)svn_branch_cmp, 0);
+	hashmap_init(hash, (hashmap_cmp_fn)svn_branch_cmp);
 }
 
 void
@@ -301,10 +299,10 @@ isvn_brancher_init(void)
 		cond_init(&g_buckets[i].bk_cond);
 		g_buckets[i].bk_fetchdone = false;
 		hashmap_init(&g_buckets[i].bk_branches,
-			(hashmap_cmp_fn)svn_branch_cmp, 0);
+			(hashmap_cmp_fn)svn_branch_cmp);
 	}
 
-	hashmap_init(&g_index_map, (hashmap_cmp_fn)git_index_cmp, 0);
+	hashmap_init(&g_index_map, (hashmap_cmp_fn)git_index_cmp);
 	TAILQ_INIT(&g_index_lru);
 	mtx_init(&g_index_lk);
 
@@ -1148,7 +1146,7 @@ isvn_get_branch_index(const char *branch, const git_tree *parent_tree,
 
 	mtx_lock(&g_index_lk);
 
-	exist = hashmap_get(&g_index_map, &newind->gi_entry, NULL);
+	exist = hashmap_get(&g_index_map, &newind->gi_entry);
 	if (exist == NULL) {
 		hashmap_add(&g_index_map, &newind->gi_entry);
 		newind = NULL;
@@ -1223,11 +1221,11 @@ isvn_free_branch_index(const char *branch, git_index *idx)
 			die("using?");
 
 		TAILQ_REMOVE(&g_index_lru, delete, gi_lru);
-		hashmap_remove(&g_index_map, &delete->gi_entry, NULL);
+		hashmap_remove(&g_index_map, &delete->gi_entry);
 		g_inactive_indices--;
 	}
 
-	exist = hashmap_get(&g_index_map, &lookup.gi_entry, NULL);
+	exist = hashmap_get(&g_index_map, &lookup.gi_entry);
 	/* INVARIANTS */
 	if (exist == NULL)
 		die("%s: ?", __func__);

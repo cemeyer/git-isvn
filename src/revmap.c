@@ -57,16 +57,16 @@ struct revmap_entry {
 };
 
 static int
-revmap_ent_cmp(const struct revmap_entry *r1, const struct revmap_entry *r2,
-    const void *dummy __unused)
+revmap_ent_cmp(const struct revmap_entry *r1, const struct revmap_entry *r2)
 {
+
 	return (int)r1->re_rev - (int)r2->re_rev;
 }
 
 void
 isvn_revmap_init(void)
 {
-	hashmap_init(&g_revmap, (hashmap_cmp_fn)revmap_ent_cmp, 0);
+	hashmap_init(&g_revmap, (hashmap_cmp_fn)revmap_ent_cmp);
 	rw_init(&g_revmap_lk);
 }
 
@@ -88,7 +88,7 @@ isvn_revmap_insert(unsigned revnum, const char *branch, const git_oid *sha1)
 
 	rw_wlock(&g_revmap_lk);
 
-	exist = hashmap_get(&g_revmap, re, NULL);
+	exist = hashmap_get(&g_revmap, re);
 	if (exist) {
 		free(re);
 
@@ -104,7 +104,7 @@ isvn_revmap_insert(unsigned revnum, const char *branch, const git_oid *sha1)
 		 * Allocate under lock to add our branch to the existing array. */
 
 		/* In case realloc moves the object: */
-		hashmap_remove(&g_revmap, exist, NULL);
+		hashmap_remove(&g_revmap, exist);
 
 		exist = xrealloc(exist, sizeof(*re) +
 		    nbr * sizeof(exist->re_branches[0]));
@@ -138,7 +138,7 @@ isvn_revmap_lookup_branchlatest(const char *branch, unsigned rev,
 		lookup.re_rev = rev;
 		hashmap_entry_init(&lookup.re_entry, memhash(&rev, sizeof(rev)));
 
-		re = hashmap_get(&g_revmap, &lookup, NULL);
+		re = hashmap_get(&g_revmap, &lookup);
 		if (re) {
 			for (i = 0; i < re->re_nbr; i++) {
 				if (re->re_branches[i].rb_branch == branch) {

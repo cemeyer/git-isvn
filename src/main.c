@@ -109,7 +109,7 @@ struct fetchdone_range {
 
 static int
 fetchdone_range_cmp(const struct fetchdone_range *r1,
-	const struct fetchdone_range *r2, const void *dummy)
+	const struct fetchdone_range *r2)
 {
 	return (int)r1->r_lo - (int)r2->r_lo;
 }
@@ -157,7 +157,7 @@ isvn_mark_fetchdone(unsigned revlo, unsigned revhi)
 			hashmap_entry_init(&key.r_entry,
 				memhash(&key.r_lo, sizeof(key.r_lo)));
 
-			exist = hashmap_remove(&g_fetchdone_hash, &key, NULL);
+			exist = hashmap_remove(&g_fetchdone_hash, &key);
 			if (!exist)
 				break;
 
@@ -220,7 +220,7 @@ _isvn_commitdrain_add(unsigned rev, int incr)
 		newr = NULL;
 
 	isvn_g_lock();
-	exist = hashmap_get(&g_commitdrain_hash, &key, NULL);
+	exist = hashmap_get(&g_commitdrain_hash, &key);
 
 	if (incr > 0) {
 		if (exist)
@@ -243,7 +243,7 @@ _isvn_commitdrain_add(unsigned rev, int incr)
 		if (refcnt > 0)
 			exist->r_hi = refcnt;
 		else {
-			hashmap_remove(&g_commitdrain_hash, exist, NULL);
+			hashmap_remove(&g_commitdrain_hash, exist);
 			/* free it below */
 			newr = exist;
 		}
@@ -275,11 +275,11 @@ isvn_mark_commitdone(unsigned revlo, unsigned revhi)
 
 	/* For revs with multiple branch edits (rare), wait until all commits
 	 * are in before marking done. */
-	drainex = hashmap_get(&g_commitdrain_hash, &drainkey, NULL);
+	drainex = hashmap_get(&g_commitdrain_hash, &drainkey);
 	if (drainex) {
 		drainex->r_hi--;
 		if (drainex->r_hi == 0) {
-			hashmap_remove(&g_commitdrain_hash, drainex, NULL);
+			hashmap_remove(&g_commitdrain_hash, drainex);
 			free(drainex);
 		} else
 			goto out;
@@ -293,7 +293,7 @@ isvn_mark_commitdone(unsigned revlo, unsigned revhi)
 			hashmap_entry_init(&key.r_entry,
 				memhash(&key.r_lo, sizeof(key.r_lo)));
 
-			exist = hashmap_remove(&g_commitdone_hash, &key, NULL);
+			exist = hashmap_remove(&g_commitdone_hash, &key);
 			if (!exist)
 				break;
 
@@ -412,9 +412,9 @@ isvn_globals_init(void)
 	assert_status_noerr(apr_pool_create(&g_apr_pool, NULL),
 	    "apr_pool_create");
 
-	hashmap_init(&g_fetchdone_hash, (hashmap_cmp_fn)fetchdone_range_cmp, 0);
-	hashmap_init(&g_commitdone_hash, (hashmap_cmp_fn)fetchdone_range_cmp, 0);
-	hashmap_init(&g_commitdrain_hash, (hashmap_cmp_fn)fetchdone_range_cmp, 0);
+	hashmap_init(&g_fetchdone_hash, (hashmap_cmp_fn)fetchdone_range_cmp);
+	hashmap_init(&g_commitdone_hash, (hashmap_cmp_fn)fetchdone_range_cmp);
+	hashmap_init(&g_commitdrain_hash, (hashmap_cmp_fn)fetchdone_range_cmp);
 
 	g_fetch_workers = xcalloc(g_nr_fetch_workers, sizeof(*g_fetch_workers));
 	g_branch_workers = xcalloc(g_nr_commit_workers, sizeof(*g_branch_workers));

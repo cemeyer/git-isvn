@@ -47,9 +47,8 @@
 static void _hashmap_resize(struct hashmap *h);
 
 void
-hashmap_init(struct hashmap *h, hashmap_cmp_fn f, size_t isize)
+hashmap_init(struct hashmap *h, hashmap_cmp_fn f)
 {
-	(void) isize;
 
 	memset(h, 0, sizeof(*h));
 
@@ -59,17 +58,14 @@ hashmap_init(struct hashmap *h, hashmap_cmp_fn f, size_t isize)
 }
 
 void *
-hashmap_get(const struct hashmap *h, /* const struct hashmap_entry * */const void *k,
-    const void *dummy)
+hashmap_get(const struct hashmap *h, /* const struct hashmap_entry * */const void *k)
 {
 	const struct hashmap_entry *ke = k;
 	struct hashmap_entry *fe;
 
-	(void)dummy;
-
 	for (fe = SLIST_FIRST(&h->hm_table[ BUCKET(h, ke->he_hash) ]); fe;
 	    fe = SLIST_NEXT(fe, he_list)) {
-		if (h->hm_cmpfn(fe, k, dummy) == 0)
+		if (h->hm_cmpfn(fe, k) == 0)
 			break;
 	}
 
@@ -77,18 +73,15 @@ hashmap_get(const struct hashmap *h, /* const struct hashmap_entry * */const voi
 }
 
 void *
-hashmap_remove(struct hashmap *h, /* const struct hashmap_entry * */const void *k,
-    const void *dummy)
+hashmap_remove(struct hashmap *h, /* const struct hashmap_entry * */const void *k)
 {
 	const struct hashmap_entry *ke = k;
 	struct hashmap_entry *fe, *pe;
 
-	(void)dummy;
-
 	pe = NULL;
 	for (fe = SLIST_FIRST(&h->hm_table[ BUCKET(h, ke->he_hash) ]); fe;
 	    fe = SLIST_NEXT(fe, he_list)) {
-		if (h->hm_cmpfn(fe, k, dummy) == 0)
+		if (h->hm_cmpfn(fe, k) == 0)
 			break;
 		pe = fe;
 	}

@@ -90,8 +90,7 @@ struct pool_entry {
 };
 
 static int
-pool_entry_cmp(const struct pool_entry *e1, const struct pool_entry *e2, const
-    unsigned char *dummy)
+pool_entry_cmp(const struct pool_entry *e1, const struct pool_entry *e2)
 {
 
 	return (e1->len != e2->len || memcmp(e1->data, e2->data, e1->len));
@@ -114,10 +113,10 @@ memintern(const void *data, size_t len)
 
 	/* initialize string pool hashmap */
 	if (!intern_map.hm_buckets)
-		hashmap_init(&intern_map, (hashmap_cmp_fn) pool_entry_cmp, 0);
+		hashmap_init(&intern_map, (hashmap_cmp_fn)pool_entry_cmp);
 
 	/* lookup interned string in pool */
-	e = hashmap_get(&intern_map, newent, NULL);
+	e = hashmap_get(&intern_map, newent);
 	if (!e)
 		/* not found: add it */
 		hashmap_add(&intern_map, newent);

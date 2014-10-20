@@ -7,9 +7,9 @@
 #include <sys/queue.h>
 #endif
 
-/* TODO: Clean up API now that we are divorced of git(1). */
+/* TODO: Clean up API: void -> hashmap_entry + to_<item>() */
 
-typedef int (*hashmap_cmp_fn)(const void *, const void *, const void *);
+typedef int (*hashmap_cmp_fn)(const void *, const void *);
 
 struct hashmap_entry {
 	SLIST_ENTRY(hashmap_entry)		he_list;
@@ -50,11 +50,9 @@ hashmap_iter_init(const struct hashmap *hm, struct hashmap_iter *iter)
 	iter->hi_bucket = 0;
 }
 
-void hashmap_init(struct hashmap *, hashmap_cmp_fn, size_t initial_size);
-void *hashmap_get(const struct hashmap *, /* const struct hashmap_entry * */const void *,
-    const void *dummy);
-void *hashmap_remove(struct hashmap *, /* const struct hashmap_entry * */const void *,
-    const void *dummy);
+void hashmap_init(struct hashmap *, hashmap_cmp_fn);
+void *hashmap_get(const struct hashmap *, /* const struct hashmap_entry * */const void *);
+void *hashmap_remove(struct hashmap *, /* const struct hashmap_entry * */const void *);
 void hashmap_add(struct hashmap *, /*struct hashmap_entry * */ void*);
 void *hashmap_iter_next(struct hashmap_iter *);
 void hashmap_free(struct hashmap *, bool);
