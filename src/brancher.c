@@ -1355,7 +1355,9 @@ void *isvn_bucket_worker(void *v)
 			mtx_unlock(&bk->bk_lock);
 		}
 
-		if (deadlock) {
+		/* XXX Shoot, this made sense for single branch worker but
+		 * doesn't anymore. */
+		if (g_nr_commit_workers == 1 && deadlock) {
 			printf("Branch-worker deadlock detected:\n");
 			isvn_commitdone_dump();
 
