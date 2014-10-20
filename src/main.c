@@ -478,6 +478,7 @@ isvn_fetch(struct isvn_client_ctx *ctx)
 			die("pthread_join: %s(%d)\n", strerror(rc), rc);
 	}
 
+	commit_signal_fetchdone();
 	for (i = 0; i < g_nr_commit_workers; i++) {
 		rc = pthread_join(g_branch_workers[i], NULL);
 		if (rc)

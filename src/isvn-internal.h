@@ -194,6 +194,7 @@ void svn_branch_hash_init(struct hashmap *hash);
 void svn_branch_revs_enqueue_and_free(struct svn_branch *branch);
 void svn_branch_append(struct svn_branch *sb, struct branch_rev *br);
 void *isvn_bucket_worker(void *v);
+void commit_signal_fetchdone(void);
 
 void isvn_revmap_init(void);
 void isvn_revmap_insert(unsigned revnum, const char *branch, const git_oid *sha1);

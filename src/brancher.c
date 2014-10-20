@@ -86,6 +86,9 @@ struct svn_branch {
 /* Each bucket-worker owns a bucket. */
 struct svn_bucket {
 	pthread_mutex_t bk_lock;
+	pthread_cond_t	bk_cond;
+	bool		bk_fetchdone;
+
 	/* Consider LRU or something to limit # */
 	struct hashmap bk_branches;	/* (b) */
 } *g_buckets;
@@ -214,8 +217,11 @@ svn_branch_revs_enqueue_and_free(struct svn_branch *branch)
 
 	/* Accumulate local branch_revs to global */
 	branch_lock(branch->br_name);
+
 	gbranch = svn_branch_get(&bk->bk_branches, branch->br_name);
 	svn_branch_move_revs(gbranch, branch);
+	cond_broadcast(&bk->bk_cond);
+
 	branch_unlock(branch->br_name);
 
 	svn_branch_free(branch);
@@ -292,6 +298,8 @@ isvn_brancher_init(void)
 	g_buckets = xcalloc(g_nr_commit_workers, sizeof(*g_buckets));
 	for (i = 0; i < g_nr_commit_workers; i++) {
 		mtx_init(&g_buckets[i].bk_lock);
+		cond_init(&g_buckets[i].bk_cond);
+		g_buckets[i].bk_fetchdone = false;
 		hashmap_init(&g_buckets[i].bk_branches,
 			(hashmap_cmp_fn)svn_branch_cmp, 0);
 	}
@@ -303,6 +311,21 @@ isvn_brancher_init(void)
 	rc = atexit(cleanup_index_files);
 	if (rc < 0)
 		die_errno("atexit");
+}
+
+void
+commit_signal_fetchdone(void)
+{
+	unsigned i;
+
+	for (i = 0; i < g_nr_commit_workers; i++) {
+		mtx_lock(&g_buckets[i].bk_lock);
+
+		g_buckets[i].bk_fetchdone = true;
+		cond_broadcast(&g_buckets[i].bk_cond);
+
+		mtx_unlock(&g_buckets[i].bk_lock);
+	}
 }
 
 /* Wait until a workable branch exists in the bucket, and return it.  If there
@@ -344,6 +367,9 @@ get_workable_branch(struct svn_bucket *bk)
 
 	mtx_lock(&bk->bk_lock);
 	while (true) {
+		while (!done && !bk->bk_fetchdone && bk->bk_branches.hm_size == 0)
+			cond_wait(&bk->bk_cond, &bk->bk_lock);
+
 		hashmap_iter_init(&bk->bk_branches, &iter);
 		while ((branch = hashmap_iter_next(&iter))) {
 			if (TAILQ_EMPTY(&branch->br_revs))
