@@ -204,10 +204,6 @@ int isvn_revmap_lookup_branchlatest(const char *branch, unsigned rev,
 	git_oid *sha1_out);
 void isvn_dump_revmap(void);
 
-/* XXX Transitioning */
-#define die		isvn_die
-#define die_errno	isvn_die_errno
-
 void die(const char *fmt, ...) __attribute__((format(printf, 1, 2)))
 	__attribute__((noreturn));
 void die_errno(const char *fmt, ...) __attribute__((format(printf, 1, 2)))
@@ -373,12 +369,6 @@ struct usage_option {
 	void		*extra;
 };
 
-/* XXX Transition */
-#define memhash		isvn_memhash
-#define memintern	isvn_memintern
-#define strhash		isvn_strhash
-#define strintern	isvn_strintern
-
 unsigned memhash(const void *, size_t);
 const void *memintern(const void *, size_t);
 
@@ -399,9 +389,6 @@ strhash(const char *str)
 int create_leading_directories(const char *);
 void isvn_complete_line(char *buf, size_t bufsz);
 
-/* XXX Transition */
-#define strip_suffix_mem	isvn_strip_suffix_mem
-#define xstrndup		isvn_xstrndup
 int strip_suffix_mem(const char *buf, size_t *len, const char *suffix);
 char *xstrndup(const char *, size_t);
 
