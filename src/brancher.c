@@ -279,8 +279,7 @@ md5_die(unsigned rev, const char *prefix, const char *path,
 	md5_tostr(mbufe, exp);
 	md5_tostr(mbufa, actual);
 
-	//die("%s: %s got %s, expected %s!", prefix, path, mbufa, mbufe);
-	printf("%s: %s@r%u got %s, expected %s!\n", prefix, path, rev, mbufa,
+	die("%s: %s@r%u got %s, expected %s!", prefix, path, rev, mbufa,
 	    mbufe);
 }
 
