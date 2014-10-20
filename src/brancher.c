@@ -549,10 +549,13 @@ isvn_lookup_copyfrom(git_repository *repo, const char *src_path,
 	}
 
 	ent = isvn_lookup_tree_path_recursive(&aux, tree, path);
-	if (ent == NULL)
-		die("git_tree_entry_byname(%s) didn't find. "
-		    "(Was: '%s' in %s@%u)", path, src_path, src_branch,
-		    src_rev);
+	if (ent == NULL) {
+		char shabuf[41];
+
+		die("git_tree_entry_byname() didn't find. "
+		    "(Copyfrom %s %s@%u -> '%s') (commit: %s)", src_branch,
+		    src_path, src_rev, path, git_oid_tostr(shabuf, 41, &sha1));
+	}
 
 	git_oid_cpy(&sha1, git_tree_entry_id(ent));
 	if (git_oid_iszero(&sha1))
