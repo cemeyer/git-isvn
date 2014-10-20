@@ -29,6 +29,7 @@ Common options:
     --trunk=<trunk_subdir>
     --username=<user>
     --password=<password>
+    --commit-workers=<number_of_Git_commit_threads>
     --fetch-workers=<number_of_SVN_fetcher_threads>
 
 Uncommon options;

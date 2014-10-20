@@ -152,6 +152,10 @@ void isvn_assert_commit(const char *branch, unsigned rev);
 bool isvn_has_commit(unsigned rev);
 /* Blocks until commit is "almost" caught-up to fetch. */
 void isvn_wait_commitdone_catchup(void);
+/* Format a path name into the isvn/ subdirectory of .git/. Create the isvn/
+ * directory if missing. Caller frees path. */
+void isvn_dir_getpath(char **path_out, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 
 static inline void
 isvn_commitdrain_inc(unsigned rev)
@@ -349,6 +353,11 @@ isvn_now_ms(void)
 #define xasprintf(...)	do {			\
 	int __rc_unused;			\
 	__rc_unused = asprintf(__VA_ARGS__);	\
+	(void) __rc_unused;			\
+} while (false)
+#define xvasprintf(...)	do {			\
+	int __rc_unused;			\
+	__rc_unused = vasprintf(__VA_ARGS__);	\
 	(void) __rc_unused;			\
 } while (false)
 #define xstrdup(X) strdup(X)

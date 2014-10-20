@@ -80,7 +80,6 @@ git_repository *g_git_repo;
 bool option_debugging;
 
 unsigned g_nr_fetch_workers = 1;
-/* XXX Restrict to 1 brancher until libgit2 has multi-index. */
 unsigned g_nr_commit_workers = 1;
 unsigned g_rev_chunk = 25;
 
@@ -360,6 +359,32 @@ isvn_wait_commitdone_catchup(void)
 		cond_wait(&g_commitdone_cond, &g_lock);
 
 	isvn_g_unlock();
+}
+
+/* Format a path name into the isvn/ subdirectory of .git/. Create the isvn/
+ * directory if missing. Caller frees path. */
+void __attribute__((format(printf, 2, 3)))
+isvn_dir_getpath(char **path_out, const char *fmt, ...)
+{
+	const char *gitrepo;
+	char *dstr, *fstr;
+	va_list ap;
+	int rc;
+
+	gitrepo = git_repository_path(g_git_repo);
+
+	xasprintf(&dstr, "%s/isvn", gitrepo);
+	rc = mkdir(dstr, 0777);
+	if (rc < 0 && errno != EEXIST)
+		die_errno("mkdir");
+
+	va_start(ap, fmt);
+	xvasprintf(&fstr, fmt, ap);
+	va_end(ap);
+
+	xasprintf(path_out, "%s/%s", dstr, fstr);
+	free(fstr);
+	free(dstr);
 }
 
 void
@@ -722,13 +747,6 @@ isvn_parse_opts(int ac, char **av, const struct usage_option *lopts,
 			break;
 
 		case 'C':
-			fprintf(stderr,
-			    "Cannot support >1 commit thread at this time. libgit2 does not support "
-			    "using multiple independent indices (yet).\n");
-			exit(EX_SOFTWARE);
-			/* NORETURN */
-			/* After libgit2 / multiple indices implemented, this
-			 * will be a FALLTHROUGH. */
 		case 'F':
 		case 'R':
 			for (it = lopts; it->flag; it++) {

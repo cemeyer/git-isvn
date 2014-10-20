@@ -437,11 +437,9 @@ isvn_fetch_feedback_unbusy(void)
 }
 
 /*
- * Feedback mechanism. Fetchers wait until at least one commit thread[0] is not
+ * Feedback mechanism. Fetchers wait until at least one commit thread is not
  * stuck committing something so we don't chew through all memory while the
  * poor commit thread(s) are blocked on disk.
- *
- * [0] (For now, there is only one due to libgit2 limitations.)
  */
 static void
 fetch_wait_commit_ready(void)

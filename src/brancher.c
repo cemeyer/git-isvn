@@ -49,6 +49,34 @@
 
 #define BR_BUCKET(name) (strhash(name) % g_nr_commit_workers)
 
+struct isvn_git_index {
+	struct hashmap_entry		 gi_entry;
+	TAILQ_ENTRY(isvn_git_index)	 gi_lru;
+
+	const char			*gi_branch;
+	char				*gi_filename;
+	bool				 gi_using;
+};
+
+#define INACT_INDEX_LIMIT		16
+
+static pthread_mutex_t			g_index_lk;
+/* The map contains all index files; the LRU only inactive ones. */
+static struct hashmap			g_index_map;
+/* Head is most recent, tail is least. */
+static TAILQ_HEAD(gitq, isvn_git_index)	g_index_lru;
+static unsigned				g_inactive_indices;
+
+static int
+git_index_cmp(const struct isvn_git_index *g1, const struct isvn_git_index *g2,
+    const void *dummy __unused)
+{
+
+	/* branches are interned, could be ptr equality */
+	return strcmp(g1->gi_branch, g2->gi_branch);
+}
+static void cleanup_index_files(void);
+
 struct svn_branch {
 	struct hashmap_entry		 br_entry;
 	const char			*br_name;
@@ -260,6 +288,7 @@ void
 isvn_brancher_init(void)
 {
 	unsigned i;
+	int rc;
 
 	g_buckets = xcalloc(g_nr_commit_workers, sizeof(*g_buckets));
 	for (i = 0; i < g_nr_commit_workers; i++) {
@@ -267,6 +296,14 @@ isvn_brancher_init(void)
 		hashmap_init(&g_buckets[i].bk_branches,
 			(hashmap_cmp_fn)svn_branch_cmp, 0);
 	}
+
+	hashmap_init(&g_index_map, (hashmap_cmp_fn)git_index_cmp, 0);
+	TAILQ_INIT(&g_index_lru);
+	mtx_init(&g_index_lk);
+
+	rc = atexit(cleanup_index_files);
+	if (rc < 0)
+		die_errno("atexit");
 }
 
 /* Wait until a workable branch exists in the bucket, and return it.  If there
@@ -534,9 +571,23 @@ isvn_lookup_copyfrom(git_repository *repo, const char *src_path,
 	return obj;
 }
 
+struct branch_context {
+	const char		*name;
+	const char		*remote;
+	bool			 new_branch;
+	unsigned		 svn_rev;
+
+	char			*commit_log;
+	git_oid			 sha1;
+	git_repository		*git_repo;
+	git_index		*index;
+
+	git_signature		*last_signature;
+};
+
 static void
-add_to_cache_internal(git_index *idx, struct branch_rev *rev, const char *path,
-    const git_oid *sha1, unsigned mode, git_time_t rev_time)
+add_to_cache_internal(const struct branch_context *bctx, struct branch_rev *rev,
+    const char *path, const git_oid *sha1, unsigned mode, git_time_t rev_time)
 {
 	git_index_entry ce = {};
 	git_otype otype;
@@ -553,7 +604,7 @@ add_to_cache_internal(git_index *idx, struct branch_rev *rev, const char *path,
 	else
 		die("bogus mode %#o", mode);
 
-	rc = git_repository_odb(&odb, git_index_owner(idx));
+	rc = git_repository_odb(&odb, bctx->git_repo);
 	if (rc < 0)
 		die("git_repository_odb");
 	rc = git_odb_read_header(&len, &otype, odb, sha1);
@@ -566,7 +617,7 @@ add_to_cache_internal(git_index *idx, struct branch_rev *rev, const char *path,
 
 	ce.flags |= GIT_IDXENTRY_VALID;
 
-	rc = git_index_add(idx, &ce);
+	rc = git_index_add(bctx->index, &ce);
 	if (rc < 0)
 		die("git_index_add: %d", rc);
 
@@ -574,19 +625,20 @@ add_to_cache_internal(git_index *idx, struct branch_rev *rev, const char *path,
 }
 
 static void
-add_to_cache(git_index *idx, struct branch_rev *rev, struct br_edit *edit)
+add_to_cache(const struct branch_context *bctx, struct branch_rev *rev,
+    struct br_edit *edit)
 {
 	const char *path;
 
 	path = strip_branch(edit->e_path, NULL);
-	add_to_cache_internal(idx, rev, path, &edit->e_new_sha1,
+	add_to_cache_internal(bctx, rev, path, &edit->e_new_sha1,
 	    0644/*XXX*/, rev->rv_timestamp);
 }
 
 struct add_tree_ctx {
-	git_index		*idx;
-	struct branch_rev	*rev;
-	const char		*atpath;
+	const struct branch_context	*bctx;
+	struct branch_rev		*rev;
+	const char			*atpath;
 };
 
 static int
@@ -605,7 +657,7 @@ add_tree_cb(const char *root, const git_tree_entry *entry, void *vctx)
 	xasprintf(&sb, "%s%s%s%s", ctx->atpath, (*ctx->atpath)? "/" : "",
 	    root, git_tree_entry_name(entry));
 
-	add_to_cache_internal(ctx->idx, ctx->rev, sb, git_tree_entry_id(entry),
+	add_to_cache_internal(ctx->bctx, ctx->rev, sb, git_tree_entry_id(entry),
 	    git_tree_entry_filemode(entry), ctx->rev->rv_timestamp);
 
 	free(sb);
@@ -615,13 +667,13 @@ add_tree_cb(const char *root, const git_tree_entry *entry, void *vctx)
 /* We want to skip the directory name of 'src_tree' itself, but otherwise add
  * its files, prefixed with 'atpath', to the index. */
 static void
-add_tree_to_cache(git_index *idx, struct branch_rev *rev, git_tree *src_tree,
-    const char *atpath)
+add_tree_to_cache(const struct branch_context *bctx, struct branch_rev *rev,
+    git_tree *src_tree, const char *atpath)
 {
 	struct add_tree_ctx ctx = {};
 	int rc;
 
-	ctx.idx = idx;
+	ctx.bctx = bctx;
 	ctx.rev = rev;
 	ctx.atpath = atpath;
 
@@ -630,19 +682,6 @@ add_tree_to_cache(git_index *idx, struct branch_rev *rev, git_tree *src_tree,
 	if (rc < 0)
 		die_errno("read_tree_recursive");
 }
-
-struct branch_context {
-	const char		*name;
-	const char		*remote;
-	bool			 new_branch;
-	unsigned		 svn_rev;
-
-	char			*commit_log;
-	git_oid			 sha1;
-	git_repository		*git_repo;
-
-	git_signature		*last_signature;
-};
 
 static int
 isvn_readinto_blob(char *buf, size_t sz, void *v)
@@ -658,7 +697,7 @@ isvn_readinto_blob(char *buf, size_t sz, void *v)
 
 static void
 git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
-    git_index *index, struct br_edit *edit)
+    struct br_edit *edit)
 {
 	struct sliding_view preimage_view;
 	struct line_buffer preimage, delta;
@@ -682,7 +721,7 @@ git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
 	path = strip_branch(edit->e_path, NULL);
 
 	if ((edit->e_kind & ED_DELETE) != 0) {
-		rc = git_index_remove_directory(index, path, 0);
+		rc = git_index_remove_directory(ctx->index, path, 0);
 		if (rc < 0)
 			die("git_index_remove_directory");
 	}
@@ -706,7 +745,7 @@ git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
 			git_oid_cpy(&rev->rv_parent, &commitsha1);
 		}
 
-		add_tree_to_cache(index, rev, tfrom, path);
+		add_tree_to_cache(ctx, rev, tfrom, path);
 		break;
 
 	case ED_NIL:
@@ -736,7 +775,7 @@ git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
 			}
 
 			/* Add the path to the index */
-			add_to_cache(index, rev, edit);
+			add_to_cache(ctx, rev, edit);
 			break;
 		}
 
@@ -768,7 +807,7 @@ git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
 		if (!preimage_opened) {
 			const git_index_entry *ce;
 
-			ce = git_index_get_bypath(index, path, 0);
+			ce = git_index_get_bypath(ctx->index, path, 0);
 			if (ce == NULL)
 				die("%s: Could not find blob (%s) in index to apply patch!",
 				    __func__, path);
@@ -857,7 +896,7 @@ git_isvn_apply_edit(struct branch_context *ctx, struct branch_rev *rev,
 			    strerror(errno));
 
 		/* Add the path to the index */
-		add_to_cache(index, rev, edit);
+		add_to_cache(ctx, rev, edit);
 		break;
 
 	case ED_PROP:
@@ -891,7 +930,6 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	git_object *parent_obj;
 	git_oid new_tree_oid;
 	char *rem_br, *at;
-	git_index *index;
 
 	git_commit *parents[2];
 	size_t nparents;
@@ -926,12 +964,8 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 
 	start_time = last = isvn_now_ms();
 
-	/* TODO: Get libgit2 to create alternative / ephemoral indices. */
-	rc = git_repository_index(&index, ctx->git_repo);
-	if (rc < 0)
-		die("git_repository_index");
-
-	rc = git_index_clear(index);
+	/* TODO: Probably unnecessary to do every rev ... */
+	rc = git_index_clear(ctx->index);
 	if (rc < 0)
 		die("git_index_clear: %d (what?)", rc);
 
@@ -952,7 +986,7 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 		if (rc)
 			die("git_tree_lookup");
 
-		rc = git_index_read_tree(index, parent_tree);
+		rc = git_index_read_tree(ctx->index, parent_tree);
 		if (rc < 0)
 			die("git_index_read_tree");
 	} else {
@@ -992,12 +1026,12 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 				last = now;
 			}
 		}
-		git_isvn_apply_edit(ctx, rev, index, edit);
+		git_isvn_apply_edit(ctx, rev, edit);
 	}
 
-	rc = git_index_write_tree(&new_tree_oid, index);
+	rc = git_index_write_tree_to(&new_tree_oid, ctx->index, ctx->git_repo);
 	if (rc < 0)
-		die("git_index_write_tree");
+		die("git_index_write_tree_to");
 
 	rc = git_tree_lookup(&new_tree, ctx->git_repo, &new_tree_oid);
 	if (rc < 0)
@@ -1069,13 +1103,140 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 		git_commit_free(parents[nparents--]);
 	git_tree_free(new_tree);
 
-	git_index_free(index);
 	git_tree_free(parent_tree);
 	git_object_free(parent_obj);
 	git_reference_free(parent_ref);
 
 	free(rem_br);
 	return 0;
+}
+
+static void
+cleanup_index_files(void)
+{
+	struct isvn_git_index *idx;
+	struct hashmap_iter iter;
+
+	mtx_lock(&g_index_lk);
+
+	hashmap_iter_init(&g_index_map, &iter);
+	while ((idx = hashmap_iter_next(&iter)))
+		(void) unlink(idx->gi_filename);
+
+	mtx_unlock(&g_index_lk);
+}
+
+/* Get a git index object for this branch. */
+static void
+isvn_get_branch_index(const char *branch, git_index **idxout)
+{
+	struct isvn_git_index *exist, *newind;
+	char *isvn_idx, safebr[64];
+	unsigned i;
+	int rc;
+
+	strlcpy(safebr, branch, sizeof(safebr));
+	for (i = 0; safebr[i]; i++)
+		if (safebr[i] == '/')
+			safebr[i] = '-';
+
+	isvn_dir_getpath(&isvn_idx, "index_%s", safebr);
+
+	newind = xcalloc(1, sizeof(*newind));
+	newind->gi_branch = branch = strintern(branch);
+	hashmap_entry_init(&newind->gi_entry, strhash(branch));
+	newind->gi_filename = isvn_idx;
+	newind->gi_using = true;
+
+	mtx_lock(&g_index_lk);
+
+	exist = hashmap_get(&g_index_map, &newind->gi_entry, NULL);
+	if (exist == NULL) {
+		hashmap_add(&g_index_map, &newind->gi_entry);
+		newind = NULL;
+	} else {
+		/* INVARIANTS */
+		if (exist->gi_using)
+			die("another worker is on this branch?");
+
+		TAILQ_REMOVE(&g_index_lru, exist, gi_lru);
+		exist->gi_using = true;
+		g_inactive_indices--;
+
+		isvn_idx = exist->gi_filename;
+	}
+
+	mtx_unlock(&g_index_lk);
+
+	if (newind) {
+		free(newind->gi_filename);
+		free(newind);
+		newind = NULL;
+	}
+
+	rc = git_index_open(idxout, isvn_idx);
+	if (rc < 0)
+		die("git_index_open: %d", rc);
+}
+
+/*
+ * Frees the git_index in-memory object and throws the index file itself back
+ * on an LRU cache. When the cache is full, the eldest (unused) index file is
+ * removed from the cache and deleted. We set up an atexit(3) handler to delete
+ * the isvn index files as well.
+ */
+static void
+isvn_free_branch_index(const char *branch, git_index *idx)
+{
+	struct isvn_git_index *exist, *delete, lookup;
+	int rc;
+
+	delete = NULL;
+
+	rc = git_index_write(idx);
+	if (rc < 0)
+		die("git_index_write: %d", rc);
+
+	git_index_free(idx);
+
+	lookup.gi_branch = branch = strintern(branch);
+	hashmap_entry_init(&lookup.gi_entry, strhash(branch));
+
+	mtx_lock(&g_index_lk);
+
+	g_inactive_indices++;
+	/* Remove an entry from LRU if full. */
+	if (g_inactive_indices > INACT_INDEX_LIMIT) {
+		delete = TAILQ_LAST(&g_index_lru, gitq);
+		/* INVARIANTS */
+		if (delete == NULL)
+			die("???");
+		if (delete->gi_using)
+			die("using?");
+
+		TAILQ_REMOVE(&g_index_lru, delete, gi_lru);
+		hashmap_remove(&g_index_map, &delete->gi_entry, NULL);
+		g_inactive_indices--;
+	}
+
+	exist = hashmap_get(&g_index_map, &lookup.gi_entry, NULL);
+	/* INVARIANTS */
+	if (exist == NULL)
+		die("%s: ?", __func__);
+
+	exist->gi_using = false;
+	TAILQ_INSERT_HEAD(&g_index_lru, exist, gi_lru);
+
+	mtx_unlock(&g_index_lk);
+
+	if (delete) {
+		rc = unlink(delete->gi_filename);
+		if (rc < 0)
+			printf("E: unlinking index file for branch '%s': %s(%d)\n",
+			    branch, strerror(errno), errno);
+		free(delete->gi_filename);
+		free(delete);
+	}
 }
 
 static int
@@ -1094,6 +1255,7 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 	ctx.commit_log = NULL;
 	xasprintf(&remote_branch, "%s/%s", option_origin, sb->br_name);
 
+	isvn_get_branch_index(sb->br_name, &ctx.index);
 	ctx.git_repo = g_git_repo;
 
 	old_sha1 = (git_oid) {};
@@ -1140,10 +1302,12 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 		branch_rev_free(rev);
 	}
 
+	isvn_free_branch_index(sb->br_name, ctx.index);
 	git_signature_free(ctx.last_signature);
 	git_reference_free(branchref);
 	free(remote_branch);
 	free(ctx.commit_log);
+
 	return (busy? -EBUSY : 0);
 }
 
