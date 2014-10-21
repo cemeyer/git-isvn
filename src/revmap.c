@@ -170,6 +170,7 @@ out:
 }
 
 /* For debugging */
+/* TODO dump in-order? */
 void
 isvn_dump_revmap(void)
 {

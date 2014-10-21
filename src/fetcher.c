@@ -224,7 +224,7 @@ _isvn_fetch_revend(svn_revnum_t revision, void *cbdata,
 		if (br->rv_branch == NULL)
 			die("invariants: non-empty changeset has no branch");
 
-		sb = svn_branch_get(br_revs, br->rv_branch);
+		sb = svn_branch_get(br_revs, -1, br->rv_branch);
 		svn_branch_append(sb, br);
 	} else {
 		isvn_mark_commitdone(br->rv_rev, br->rv_rev);
@@ -234,7 +234,7 @@ _isvn_fetch_revend(svn_revnum_t revision, void *cbdata,
 	SLIST_FOREACH_SAFE(abr, &affil_head, rv_afflink, tmp) {
 		SLIST_NEXT(abr, rv_afflink) = NULL;
 
-		sb = svn_branch_get(br_revs, abr->rv_branch);
+		sb = svn_branch_get(br_revs, -1, abr->rv_branch);
 		svn_branch_append(sb, abr);
 	}
 	return NULL;

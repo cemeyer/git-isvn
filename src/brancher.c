@@ -78,18 +78,21 @@ static void cleanup_index_files(void);
 
 struct svn_branch {
 	struct hashmap_entry		 br_entry;
+	TAILQ_ENTRY(svn_branch)		 br_list;
+
 	const char			*br_name;
 	TAILQ_HEAD(revlist, branch_rev)	 br_revs;
 };
 
 /* Each bucket-worker owns a bucket. */
 struct svn_bucket {
-	pthread_mutex_t bk_lock;
-	pthread_cond_t	bk_cond;
-	bool		bk_fetchdone;
+	pthread_mutex_t 		bk_lock;
+	pthread_cond_t			bk_cond;
+	bool				bk_fetchdone;
 
-	/* Consider LRU or something to limit # */
-	struct hashmap bk_branches;	/* (b) */
+	struct hashmap			bk_branches;	/* (b) */
+	/* The order branches will be processed in: */
+	TAILQ_HEAD(, svn_branch)	bk_branch_list;	/* (b) */
 } *g_buckets;
 
 static inline void
@@ -124,9 +127,10 @@ new_svn_branch(const char *name)
 }
 
 struct svn_branch *
-svn_branch_get(struct hashmap *h, const char *name)
+svn_branch_get(struct hashmap *h, int gbucket, const char *name)
 {
 	struct svn_branch *b, blookup;
+	struct svn_bucket *bk;
 
 	blookup.br_name = __DECONST(name, char *);
 	hashmap_entry_init(&blookup.br_entry, strhash(name));
@@ -137,6 +141,14 @@ svn_branch_get(struct hashmap *h, const char *name)
 
 	b = new_svn_branch(name);
 	hashmap_add(h, b);
+
+	if (gbucket >= 0) {
+		bk = &g_buckets[gbucket];
+		if (h != &bk->bk_branches)
+			die("%s???", __func__);
+
+		TAILQ_INSERT_TAIL(&bk->bk_branch_list, b, br_list);
+	}
 	return b;
 }
 
@@ -208,15 +220,17 @@ svn_branch_move_revs(struct svn_branch *dst, struct svn_branch *src)
 void
 svn_branch_revs_enqueue_and_free(struct svn_branch *branch)
 {
-	struct svn_bucket *bk;
 	struct svn_branch *gbranch;
+	struct svn_bucket *bk;
+	unsigned bucket;
 
-	bk = &g_buckets[BR_BUCKET(branch->br_name)];
+	bucket = BR_BUCKET(branch->br_name);
+	bk = &g_buckets[bucket];
 
 	/* Accumulate local branch_revs to global */
 	branch_lock(branch->br_name);
 
-	gbranch = svn_branch_get(&bk->bk_branches, branch->br_name);
+	gbranch = svn_branch_get(&bk->bk_branches, bucket, branch->br_name);
 	svn_branch_move_revs(gbranch, branch);
 	cond_broadcast(&bk->bk_cond);
 
@@ -300,6 +314,7 @@ isvn_brancher_init(void)
 		g_buckets[i].bk_fetchdone = false;
 		hashmap_init(&g_buckets[i].bk_branches,
 			(hashmap_cmp_fn)svn_branch_cmp);
+		TAILQ_INIT(&g_buckets[i].bk_branch_list);
 	}
 
 	hashmap_init(&g_index_map, (hashmap_cmp_fn)git_index_cmp);
@@ -333,8 +348,6 @@ get_workable_branch(struct svn_bucket *bk)
 {
 	struct branch_rev *dummy_rev, *it, *end;
 	struct svn_branch *branch, *bb, *bret;
-	unsigned lowest_rev, brev;
-	struct hashmap_iter iter;
 	unsigned rev;
 	bool done;
 
@@ -358,33 +371,33 @@ get_workable_branch(struct svn_bucket *bk)
 
 	bb = NULL;
 	done = false;
-	lowest_rev = UINT_MAX;
 
 	bret = new_svn_branch("");
 	dummy_rev = new_branch_rev(UINT_MAX);
 
 	mtx_lock(&bk->bk_lock);
 	while (true) {
+		/* TODO: hm_size isn't zero after first branch we see because
+		 * we never actually remove branches. Fix spin for that case. */
 		while (!done && !bk->bk_fetchdone && bk->bk_branches.hm_size == 0)
 			cond_wait(&bk->bk_cond, &bk->bk_lock);
 
-		hashmap_iter_init(&bk->bk_branches, &iter);
-		while ((branch = hashmap_iter_next(&iter))) {
+		TAILQ_FOREACH(branch, &bk->bk_branch_list, br_list) {
 			if (TAILQ_EMPTY(&branch->br_revs))
 				continue;
 
-			brev = TAILQ_FIRST(&branch->br_revs)->rv_rev;
-			if (brev >= lowest_rev)
-				continue;
-
-			/* Just a heuristic; we may end up waiting for earlier
-			 * revisions: */
-			lowest_rev = brev;
+			/* Try any non-empty branch. We put it on the back of
+			 * the branch work queue so we don't keep spinning on
+			 * the same branch, which can mean we deadlock against
+			 * ourself. */
 			bb = branch;
+			TAILQ_REMOVE(&bk->bk_branch_list, bb, br_list);
+			TAILQ_INSERT_TAIL(&bk->bk_branch_list, bb, br_list);
+			break;
 		}
 
 		/* It's okay to not 'claim' this branch by deleting it under
-		 * lock becaues we aren't contesting any other worker threads
+		 * lock because we aren't contesting any other worker threads
 		 * -- each one owns a bucket. The only other accessor on
 		 * bk_lock is the fetcher threads, and they will only ever
 		 * insert more revs. */

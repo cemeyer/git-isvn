@@ -189,7 +189,7 @@ void isvn_fetch_feedback_unbusy(void);
 
 void isvn_brancher_init(void);
 struct svn_branch *new_svn_branch(const char *name);
-struct svn_branch *svn_branch_get(struct hashmap *h, const char *name);
+struct svn_branch *svn_branch_get(struct hashmap *h, int gbucket, const char *name);
 void svn_branch_hash_init(struct hashmap *hash);
 void svn_branch_revs_enqueue_and_free(struct svn_branch *branch);
 void svn_branch_append(struct svn_branch *sb, struct branch_rev *br);
