@@ -1315,7 +1315,8 @@ git_isvn_apply_revs(struct svn_branch *sb, bool *committed_any)
 
 		/* XXX Could batch them up, but be wary that ascending revs on
 		 * a branch aren't neccessarily a contiguous range. */
-		isvn_mark_commitdone(rev->rv_rev, rev->rv_rev);
+		if (!rev->rv_secondary)
+			isvn_mark_commitdone(rev->rv_rev, rev->rv_rev);
 		*committed_any = true;
 
 		TAILQ_REMOVE(&sb->br_revs, rev, rv_list);
