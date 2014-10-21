@@ -54,8 +54,9 @@ struct isvn_git_index {
 	TAILQ_ENTRY(isvn_git_index)	 gi_lru;
 
 	const char			*gi_branch;
-	char				*gi_filename;
 	bool				 gi_using;
+
+	git_index			*gi_index;
 };
 
 #define INACT_INDEX_LIMIT		16
@@ -74,7 +75,6 @@ git_index_cmp(const struct isvn_git_index *g1, const struct isvn_git_index *g2)
 	/* branches are interned, could be ptr equality */
 	return strcmp(g1->gi_branch, g2->gi_branch);
 }
-static void cleanup_index_files(void);
 
 struct svn_branch {
 	struct hashmap_entry		 br_entry;
@@ -305,7 +305,6 @@ void
 isvn_brancher_init(void)
 {
 	unsigned i;
-	int rc;
 
 	g_buckets = xcalloc(g_nr_commit_workers, sizeof(*g_buckets));
 	for (i = 0; i < g_nr_commit_workers; i++) {
@@ -320,10 +319,6 @@ isvn_brancher_init(void)
 	hashmap_init(&g_index_map, (hashmap_cmp_fn)git_index_cmp);
 	TAILQ_INIT(&g_index_lru);
 	mtx_init(&g_index_lk);
-
-	rc = atexit(cleanup_index_files);
-	if (rc < 0)
-		die_errno("atexit");
 }
 
 void
@@ -1119,43 +1114,24 @@ git_isvn_apply_rev(struct branch_context *ctx, struct branch_rev *rev)
 	return 0;
 }
 
-static void
-cleanup_index_files(void)
-{
-	struct isvn_git_index *idx;
-	struct hashmap_iter iter;
-
-	mtx_lock(&g_index_lk);
-
-	hashmap_iter_init(&g_index_map, &iter);
-	while ((idx = hashmap_iter_next(&iter)))
-		(void) unlink(idx->gi_filename);
-
-	mtx_unlock(&g_index_lk);
-}
-
 /* Get a git index object for this branch. */
 static void
 isvn_get_branch_index(const char *branch, const git_tree *parent_tree,
     git_index **idxout)
 {
 	struct isvn_git_index *exist, *newind;
-	char *isvn_idx, safebr[64];
-	unsigned i;
+	git_index *idx;
 	int rc;
 
-	strlcpy(safebr, branch, sizeof(safebr));
-	for (i = 0; safebr[i]; i++)
-		if (safebr[i] == '/')
-			safebr[i] = '-';
-
-	isvn_dir_getpath(&isvn_idx, "index_%s", safebr);
+	rc = git_index_new(&idx);
+	if (rc < 0)
+		die("git_index_new: %d", rc);
 
 	newind = xcalloc(1, sizeof(*newind));
 	newind->gi_branch = branch = strintern(branch);
 	hashmap_entry_init(&newind->gi_entry, strhash(branch));
-	newind->gi_filename = isvn_idx;
 	newind->gi_using = true;
+	newind->gi_index = idx;
 
 	mtx_lock(&g_index_lk);
 
@@ -1172,51 +1148,39 @@ isvn_get_branch_index(const char *branch, const git_tree *parent_tree,
 		exist->gi_using = true;
 		g_inactive_indices--;
 
-		isvn_idx = exist->gi_filename;
+		idx = exist->gi_index;
 	}
 
 	mtx_unlock(&g_index_lk);
 
-	rc = git_index_open(idxout, isvn_idx);
-	if (rc < 0)
-		die("git_index_open: %d", rc);
+	if (exist) {
+		/* INVARIANTS */
+		if (newind == NULL)
+			die("%s inv", __func__);
 
-	if (newind) {
-		free(newind->gi_filename);
+		git_index_free(newind->gi_index);
 		free(newind);
 		newind = NULL;
-
-		/* Read the existing index */
-		rc = git_index_read(*idxout, false);
-		if (rc < 0)
-			die("git_index_read: %d", rc);
 	} else if (parent_tree) {
-		/* We created a new index file for an existing branch? */
-		rc = git_index_read_tree(*idxout, parent_tree);
+		/* We created a new index file for an existing branch. */
+		rc = git_index_read_tree(idx, parent_tree);
 		if (rc < 0)
 			die("git_index_read_tree");
 	}
+
+	*idxout = idx;
 }
 
 /*
- * Frees the git_index in-memory object and throws the index file itself back
- * on an LRU cache. When the cache is full, the eldest (unused) index file is
- * removed from the cache and deleted. We set up an atexit(3) handler to delete
- * the isvn index files as well.
+ * Throws the index object back on an LRU cache. When the cache is full, the
+ * eldest (unused) index is removed from the cache and deleted.
  */
 static void
 isvn_free_branch_index(const char *branch, git_index *idx)
 {
 	struct isvn_git_index *exist, *delete, lookup;
-	int rc;
 
 	delete = NULL;
-
-	rc = git_index_write(idx);
-	if (rc < 0)
-		die("git_index_write: %d", rc);
-
-	git_index_free(idx);
 
 	lookup.gi_branch = branch = strintern(branch);
 	hashmap_entry_init(&lookup.gi_entry, strhash(branch));
@@ -1249,11 +1213,7 @@ isvn_free_branch_index(const char *branch, git_index *idx)
 	mtx_unlock(&g_index_lk);
 
 	if (delete) {
-		rc = unlink(delete->gi_filename);
-		if (rc < 0)
-			printf("E: unlinking index file for branch '%s': %s(%d)\n",
-			    branch, strerror(errno), errno);
-		free(delete->gi_filename);
+		git_index_free(delete->gi_index);
 		free(delete);
 	}
 }
